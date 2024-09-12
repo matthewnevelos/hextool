@@ -14,8 +14,8 @@ Scapy
 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF  .."3DUfw........
 
 Far Manager
-000000000: 00 00 00 5B 68 65 78 64 ¦ 75 6D 70 5D 00 00 00 00     [hexdump]
-000000010: 00 11 22 33 44 55 66 77 ¦ 88 99 AA BB CC DD EE FF   ?"3DUfwˆ™ª»ÌÝîÿ
+000000000: 00 00 00 5B 68 65 78 64 ï¿½ 75 6D 70 5D 00 00 00 00     [hexdump]
+000000010: 00 11 22 33 44 55 66 77 ï¿½ 88 99 AA BB CC DD EE FF   ?"3DUfwï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
 
 2. Restore binary data from the formats above as well
@@ -23,21 +23,14 @@ Far Manager
 
 """
 
-__version__ = '3.4dev'
+__version__ = '3.3'
 __author__  = 'anatoly techtonik <techtonik@gmail.com>'
 __license__ = 'Public Domain'
 
 __history__ = \
 """
-3.4 (WIP)
- * support more dump formats for restore() by better
-   detection of column separator - now dumps with
-   unicode separator U+2502 are also supported
- * another fix for Python 3, which is too smart -
-   opens dumps in system encoding (which can be any)
-   and fails to read dump if its encoding differs
- * add restore() testdata for various dump formats
- * add license file for packagers (issue #3)
+3.4 (2024-09-11)
+ * allow for size of 0 in chunks() for contiguous string of hex values
 
 3.3 (2015-01-22)
  * accept input from sys.stdin if "-" is specified
@@ -138,11 +131,14 @@ def chunks(seq, size):
      >>> list( chunks([1,2,3,4,5,6,7], 3) )
      [[1, 2, 3], [4, 5, 6], [7]]
   '''
-  d, m = divmod(len(seq), size)
-  for i in range(d):
-    yield seq[i*size:(i+1)*size]
-  if m:
-    yield seq[d*size:]
+  if not size:
+    yield seq
+  else:
+    d, m = divmod(len(seq), size)
+    for i in range(d):
+      yield seq[i*size:(i+1)*size]
+    if m:
+      yield seq[d*size:]
 
 def chunkread(f, size):
   '''Generator that reads from file like object. May return less
@@ -267,7 +263,6 @@ def restore(dump):
     raise TypeError('Invalid data for restore')
 
   text = dump.strip()  # ignore surrounding empty lines
-  dumptype = None
   for line in text.split('\n'):
     # strip address part
     addrend = line.find(':')
@@ -276,24 +271,14 @@ def restore(dump):
     line = line.lstrip()
     # check dump type
     if line[2] == ' ':  # 00 00 00 ...  type of dump
-      # calculate separator position
-      sepstart = (2+1)*8  # ('00'+' ')*8
+      # check separator
+      sepstart = (2+1)*7+2  # ('00'+' ')*7+'00'
       sep = line[sepstart:sepstart+3]
-      if sep[0] == ' ' and sep[1] != ' ':
-        # ...00 00  00 00...
-        dumptype = "doublespaced"
+      if sep[:2] == '  ' and sep[2:] != ' ':  # ...00 00  00 00...
         hexdata = line[:bytehexwidth+1]
-      elif sep[1] == ' ':
-        # ...00 00 | 00 00...  - Far Manager
-        dumptype = "singlebytesep"
-        hexdata = line[:sepstart-1] + line[sepstart+2:bytehexwidth+3]
-      elif sep == '\xe2\x94\x82':
-        # ...00 00 \xe2\x94\x82 00 00...  - Far Manager (utf-8)
-        dumptype = "unicodesep"
-        hexdata = line[:sepstart-1] + line[sepstart+4:bytehexwidth+5]
-      else:
-        # ...00 00 00 00... - Scapy, no separator
-        dumptype = "nosep"
+      elif sep[2:] == ' ':  # ...00 00 | 00 00...  - Far Manager
+        hexdata = line[:sepstart] + line[sepstart+3:bytehexwidth+2]
+      else:                 # ...00 00 00 00... - Scapy, no separator
         hexdata = line[:bytehexwidth]
       line = hexdata
     result += dehex(line)
@@ -385,8 +370,8 @@ def runtest(logfile=None):
 
   far = \
 '''
-000000000: 00 00 00 5B 68 65 78 64 ¦ 75 6D 70 5D 00 00 00 00     [hexdump]
-000000010: 00 11 22 33 44 55 66 77 ¦ 88 99 0A BB CC DD EE FF   ?"3DUfwˆ™ª»ÌÝîÿ
+000000000: 00 00 00 5B 68 65 78 64 ï¿½ 75 6D 70 5D 00 00 00 00     [hexdump]
+000000010: 00 11 22 33 44 55 66 77 ï¿½ 88 99 0A BB CC DD EE FF   ?"3DUfwï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 '''
   echo('restore far format ', linefeed=False)
   assert bin == restore(far), 'far format check failed'
@@ -462,12 +447,7 @@ def main():
         instream = sys.stdin
       else:
         if PY3K:
-          # Python 3 opens text files in system default encoding
-          # (which is not utf-8 on Windows) and chokes on missing
-          # points (see Wikipedia for missing points). For bullet
-          # proof file reading I use `cp437` single-byte encoding
-          # without missing points
-          instream = open(args[0], encoding='cp437')
+          instream = open(args[0])
         else:
           instream = open(args[0], 'rb')
 
@@ -486,9 +466,6 @@ if __name__ == '__main__':
 # [x] file restore from command line utility
 # [ ] write dump with LF on Windows for consistency
 # [ ] encoding param for hexdump()ing Python 3 str if anybody requests that
-# [ ] report exact line and position if invalid data is found, right now
-#     it is indescriptive "TypeError: Non-hexadecimal digit found"
-#     or "TypeError: Odd-length string"
 
 # [ ] document chunking API
 # [ ] document hexdump API
